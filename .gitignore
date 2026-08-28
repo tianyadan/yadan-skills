@@ -1,0 +1,19 @@
+# 本仓库只包含用户开发的技能,忽略系统内置及其他已安装技能
+# (软链接或非 dev-changelog/dev-log-context/project-map 的目录)
+brandkit
+codebase-memory
+context-ledger
+design-taste-frontend
+design-taste-frontend-v1
+full-output-enforcement
+gpt-taste
+high-end-visual-design
+image-to-code
+imagegen-frontend-mobile
+imagegen-frontend-web
+industrial-brutalist-ui
+memory-snapshot
+minimalist-ui
+redesign-existing-projects
+send-daily-report
+stitch-design-taste
