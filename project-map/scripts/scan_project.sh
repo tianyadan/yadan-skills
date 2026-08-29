@@ -46,6 +46,37 @@ now_epoch() { # 当前秒级时间戳(macOS / Linux 兼容)
   date +%s
 }
 
+# 带超时的 claude -p 调用: 避免 "claude -p" 在前台静默挂住导致"没反应"
+# 超时(>PROJECT_MAP_CLAUDE_TIMEOUT 秒,默认 90s)仍无结果 → fallback
+run_claude() { # 调用 claude -p,带 timeout + 可见 stderr;claude 缺失/超时/无 → fallback
+  local prompt="$1" t="${PROJECT_MAP_CLAUDE_TIMEOUT:-90}"
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "[project-map] ⚠️ claude 命令不可用,直接 fallback(文件清单) —— 不再等待" >&2
+    printf '&__CLAUDE_FALLBACK__&'
+    return
+  fi
+  # macOS 无 `timeout`,优先 gtimeout;/usr/bin/timeout
+  if command -v gtimeout >/dev/null 2>&1; then
+    T="gtimeout $t"
+  elif command -v timeout >/dev/null 2>&1; then
+    T="timeout $t"
+  else
+    T=""   # 无 timeout 工具: 不用 timeout 直接跑(有风险仍可能卡,但 bear 机会)
+    echo "[project-map] ⚠️ 无 timeout/gtimeout,claude 可能仍会等待;建议 brew install coreutils" >&2
+  fi
+  echo "[project-map] ⏳ 调 claude -p 生成…(超时 ${t}s)" >&2   # ← 控制台可见进度
+  # stderr 不再吞,让 claude 进度可见;仍放 $(...) 捕获 stdout
+  local out
+  out="$( { eval "$T claude -p $prompt" ; } 2>&1 )"
+  if [ -z "$out" ]; then
+    echo "[project-map] ⏱️ claude 未返回(超时或不可用),退化: 生成纯文件清单 project-map" >&2
+    printf '&__CLAUDE_FALLBACK__&'
+    return
+  fi
+  printf '%s' "$out"
+}
+
+
 # ================= 全量模式 =================
 full_scan() {
   if [ ! -d "$MAP_DIR" ]; then mkdir -p "$MAP_DIR"; fi
@@ -108,13 +139,31 @@ $ROOT_FILES"
   MAX="${PROJECT_MAP_MAX_TEXT:-60000}"
   [ "${#PROMPT}" -gt "$MAX" ] && PROMPT="$(printf '%s' "$PROMPT" | head -c "$MAX")"
 
-  BODY="$(claude -p "$PROMPT" 2>/dev/null)"
-  if [ -z "$BODY" ]; then
-    echo "[project-map] 全量生成失败(claude 未返回内容)" >&2
-    exit 1
-  fi
+  BODY="$(run_claude "$PROMPT" 2>/dev/null)"
+  if [ "$BODY" = "&__CLAUDE_FALLBACK__&" ] || [ -z "$BODY" ]; then
+    echo "[project-map] ⚠️ claude 不可用/超时,退化生成纯文件清单 project-map(非 AI 分析版)" >&2
+    BODY="$(cat <<EOF
 
-  # 写入文档(若模型未自带头部,补上)
+# 项目脉络 / 架构总览(文件清单退化版,claude 不可用时代替)
+
+## 1. 项目概览
+(技术栈/定位/入口,待 Ai 补充)
+
+## 2. 目录层级结构
+$(printf '%s' "$TREE")
+
+## 3. 分层 / 模块
+(待 Ai 补充)
+
+## 4. 核心链路 / 数据流
+(待 Ai 补充)
+
+## 5. 变更时间线
+<!-- 增量更新将追加在此 -->
+EOF
+)"
+  fi
+  # 写入文档(若未自带头部,补上)
   if ! printf '%s' "$BODY" | grep -q '^# 项目脉络'; then
     BODY="# 项目脉络 / 架构总览
 
@@ -226,9 +275,9 @@ $STRUCT_CTX"
   MAX="${PROJECT_MAP_MAX_TEXT:-60000}"
   [ "${#PROMPT}" -gt "$MAX" ] && PROMPT="$(printf '%s' "$PROMPT" | head -c "$MAX")"
 
-  BODY="$(claude -p "$PROMPT" 2>/dev/null)"
-  if [ -z "$BODY" ]; then
-    echo "[project-map] 增量生成失败(claude 未返回内容)" >&2
+  BODY="$(run_claude "$PROMPT" 2>/dev/null)"
+  if [ "$BODY" = "&__CLAUDE_FALLBACK__&" ] || [ -z "$BODY" ]; then
+    echo "[project-map] ⏱️ claude 不可用/超时,本次增量无 AI 结论,跳过(不改写文档)" >&2
     exit 1
   fi
 
