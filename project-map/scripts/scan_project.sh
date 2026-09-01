@@ -25,6 +25,14 @@ if [ -f "$SKILL_DIR/config.sh" ]; then
   source "$SKILL_DIR/config.sh"
 fi
 
+tslog() { # 带时间戳的日志输出
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+}
+
+now_epoch() { # 当前秒级时间戳(macOS / Linux 兼容)
+  date +%s
+}
+
 # ---- 定位仓库根: git 仓库 → 用 git 根; 非 git(或 .git 被 gitignore) → fallback 用 $PWD ----
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 if [ -z "$REPO_ROOT" ]; then
@@ -41,14 +49,6 @@ LOG_DIR="$REPO_ROOT/${PROJECT_MAP_LOG_DIR:-docs/change-log}"
 read_meta() { # 读取 meta 键值
   local key="$1"
   [ -f "$META_FILE" ] && awk -F= -v k="$key" '$1==k{print $2}' "$META_FILE" | tail -n1
-}
-
-now_epoch() { # 当前秒级时间戳(macOS / Linux 兼容)
-  date +%s
-}
-
-tslog() { # 带时间戳的日志输出 → 写入 cron 运行日志(如 docs/project-map-cron.log),便于区分每次执行
-  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
 }
 
 # 带超时的 claude -p 调用: 避免 "claude -p" 在前台静默挂住导致"没反应"
