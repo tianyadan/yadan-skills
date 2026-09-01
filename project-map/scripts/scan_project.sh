@@ -25,11 +25,12 @@ if [ -f "$SKILL_DIR/config.sh" ]; then
   source "$SKILL_DIR/config.sh"
 fi
 
-# ---- 定位仓库根 ----
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-  echo "[project-map] 不在 git 仓库中,跳过" >&2
-  exit 0
-}
+# ---- 定位仓库根: git 仓库 → 用 git 根; 非 git(或 .git 被 gitignore) → fallback 用 $PWD ----
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$REPO_ROOT" ]; then
+  REPO_ROOT="$PWD"
+  tslog "非 git 仓库(git rev-parse 无), fallback 用当前目录: $PWD"
+fi
 cd "$REPO_ROOT" || exit 1
 
 MAP_FILE="$REPO_ROOT/${PROJECT_MAP_FILE:-docs/project-map.md}"
@@ -46,12 +47,16 @@ now_epoch() { # 当前秒级时间戳(macOS / Linux 兼容)
   date +%s
 }
 
+tslog() { # 带时间戳的日志输出 → 写入 cron 运行日志(如 docs/project-map-cron.log),便于区分每次执行
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+}
+
 # 带超时的 claude -p 调用: 避免 "claude -p" 在前台静默挂住导致"没反应"
 # 超时(>PROJECT_MAP_CLAUDE_TIMEOUT 秒,默认 90s)仍无结果 → fallback
 run_claude() { # 调用 claude -p,带 timeout + 可见 stderr;claude 缺失/超时/无 → fallback
   local prompt="$1" t="${PROJECT_MAP_CLAUDE_TIMEOUT:-90}"
   if ! command -v claude >/dev/null 2>&1; then
-    echo "[project-map] ⚠️ claude 命令不可用,直接 fallback(文件清单) —— 不再等待" >&2
+    tslog "⚠️ claude 命令不可用,直接 fallback(文件清单) —— 不再等待"
     printf '&__CLAUDE_FALLBACK__&'
     return
   fi
@@ -62,14 +67,14 @@ run_claude() { # 调用 claude -p,带 timeout + 可见 stderr;claude 缺失/超�
     T="timeout $t"
   else
     T=""   # 无 timeout 工具: 不用 timeout 直接跑(有风险仍可能卡,但 bear 机会)
-    echo "[project-map] ⚠️ 无 timeout/gtimeout,claude 可能仍会等待;建议 brew install coreutils" >&2
+    tslog "⚠️ 无 timeout/gtimeout,claude 可能仍会等待;建议 brew install coreutils"
   fi
-  echo "[project-map] ⏳ 调 claude -p 生成…(超时 ${t}s)" >&2   # ← 控制台可见进度
+  tslog "⏳ 调 claude -p 生成…(超时 ${t}s)"
   # stderr 不再吞,让 claude 进度可见;仍放 $(...) 捕获 stdout
   local out
   out="$( { eval "$T claude -p $prompt" ; } 2>&1 )"
   if [ -z "$out" ]; then
-    echo "[project-map] ⏱️ claude 未返回(超时或不可用),退化: 生成纯文件清单 project-map" >&2
+    tslog "⏱️ claude 未返回(超时或不可用),退化: 生成纯文件清单 project-map"
     printf '&__CLAUDE_FALLBACK__&'
     return
   fi
@@ -141,7 +146,7 @@ $ROOT_FILES"
 
   BODY="$(run_claude "$PROMPT" 2>/dev/null)"
   if [ "$BODY" = "&__CLAUDE_FALLBACK__&" ] || [ -z "$BODY" ]; then
-    echo "[project-map] ⚠️ claude 不可用/超时,退化生成纯文件清单 project-map(非 AI 分析版)" >&2
+    tslog "⚠️ claude 不可用/超时,退化生成纯文件清单 project-map(非 AI 分析版)"
     BODY="$(cat <<EOF
 
 # 项目脉络 / 架构总览(文件清单退化版,claude 不可用时代替)
@@ -181,13 +186,13 @@ last_scan_at=$(date '+%Y-%m-%d %H:%M:%S')
 last_scan_epoch=$(now_epoch)
 processed=
 EOF
-  echo "[project-map] 已全量生成 $MAP_FILE" >&2
+  tslog "已全量生成 $MAP_FILE"
 }
 
 # ================= 增量模式 =================
 incremental_scan() {
   [ -f "$MAP_FILE" ] || {
-    echo "[project-map] 尚无 $MAP_FILE,请先全量生成(--full)" >&2
+    tslog "尚无 $MAP_FILE,请先全量生成(--full)"
     exit 1
   }
 
@@ -216,7 +221,7 @@ incremental_scan() {
   NEW_LOGS="$(printf '%s\n' "$NEW_LOGS" | grep -v '^$' )"
 
   if [ -z "$NEW_LOGS" ]; then
-    echo "[project-map] 距上次(${LAST_EPOCH})无新开发日志,跳过增量(零成本)" >&2
+    tslog "距上次(${LAST_EPOCH})无新开发日志,跳过增量(零成本)"
     exit 0
   fi
 
@@ -277,7 +282,7 @@ $STRUCT_CTX"
 
   BODY="$(run_claude "$PROMPT" 2>/dev/null)"
   if [ "$BODY" = "&__CLAUDE_FALLBACK__&" ] || [ -z "$BODY" ]; then
-    echo "[project-map] ⏱️ claude 不可用/超时,本次增量无 AI 结论,跳过(不改写文档)" >&2
+    tslog "⏱️ claude 不可用/超时,本次增量无 AI 结论,跳过(不改写文档)"
     exit 1
   fi
 
@@ -302,7 +307,7 @@ PY
     APPEND="$(printf '%s' "$BODY" | awk '/<TIMELINE_APPEND>/{f=1;next}/<\/TIMELINE_APPEND>/{f=0}f' | sed '/^[[:space:]]*$/d')"
   fi
   rm -f "$PY_TMP"
-  [ -z "$APPEND" ] && { echo "[project-map] 增量未产出时间线条目,跳过写入" >&2; exit 0; }
+  [ -z "$APPEND" ] && { tslog "增量未产出时间线条目,跳过写入"; exit 0; }
 
   # 用变更日志路径集合作为该批次标记,防重复
   BATCH_KEY="$(printf '%s' "$NEW_LOGS" | tr '\n' ',' | sed 's/,$//')"
@@ -325,7 +330,7 @@ PY
   # --- 追加时间线条目到 ## 5. 区 ---
   # 若已有该批次的标记则跳过(幂等)
   if grep -qF "batch: $BATCH_KEY" "$MAP_FILE"; then
-    echo "[project-map] 该批次(${BATCH_KEY})已写入,跳过" >&2
+    tslog "该批次(${BATCH_KEY})已写入,跳过"
   else
     cat >> "$MAP_FILE" <<EOF
 
@@ -335,7 +340,7 @@ PY
 $APPEND
 </details>
 EOF
-    echo "[project-map] 已追加增量更新到 $MAP_FILE" >&2
+    tslog "已追加增量更新到 $MAP_FILE"
   fi
 
   # --- 记录/刷新已处理日志,更新 meta(合并新增日志身份 → processed) ---
@@ -354,5 +359,5 @@ MODE="${1:-}"
 case "$MODE" in
   --full|-f) full_scan ;;
   --incremental|-i|"") incremental_scan ;;
-  *) echo "[project-map] 未知参数:$MODE(支持 --full / --incremental)" >&2; exit 1 ;;
+  *) tslog "未知参数:$MODE(支持 --full / --incremental)"; exit 1 ;;
 esac

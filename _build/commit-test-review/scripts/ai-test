@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# commit-test-review / ai-test(统一入口 wrapper)
+# 所有需要运行 ai-test.py 的地方都走本脚本,由它统一决定用哪个 Python:
+#   1) 仓库 .ai-test/venv/bin/python 存在 → 用它(自动带 venv 依赖,如 pymysql)
+#   2) 否则 → 退回系统 python3(此时 pymysql 可能不可用,init/env 会建议先建 venv)
+# 好处:Git hook / Claude headless / 后台 / 未来 CI 都不用先 source activate。
+#
+# 用法:
+#   ai-test [子命令...]
+#   ./.claude/skills/commit-test-review/scripts/ai-test db test kfi-cloud-dev
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AI_TEST_PY="$SCRIPT_DIR/ai-test.py"
+
+# 定位仓库根:优先从传入的 ai-test 工作目录,其次当前 git 仓库
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "${PWD:-.}")"
+
+VENV_PYTHON="$REPO_ROOT/.ai-test/venv/bin/python"
+if [ -x "$VENV_PYTHON" ]; then
+    exec "$VENV_PYTHON" "$AI_TEST_PY" "$@"
+fi
+
+# venv 不存在:退回系统 python3(init/env 会创建 venv;其余命令自动降级)
+exec python3 "$AI_TEST_PY" "$@"

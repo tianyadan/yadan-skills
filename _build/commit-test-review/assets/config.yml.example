@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# commit-test-review / assets/config.yml.example
+# 配置示例。本文件仅示意结构;**不包含任何密码**。
+# 真实配置由 ai-test CLI 生成: python3 scripts/ai-test.py init / db add-source / db set-test
+version: 1
+
+database:
+  sources:
+    - name: sales
+      type: mysql
+      host: 10.0.0.21
+      port: 3306
+      database: sales
+      username: ai_readonly
+      keychain-service: ai-test
+      keychain-account: sales
+  test:
+    name: ai-test
+    type: mysql
+    host: 10.0.0.30
+    port: 3306
+    database: ai_test
+    username: ai_test
+    keychain-service: ai-test
+    keychain-account: test-db
+
+test:
+  report-dir: docs/test
